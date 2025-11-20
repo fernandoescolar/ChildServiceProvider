@@ -1,0 +1,94 @@
+on:
+  push:
+    tags:
+    - 'v*'
+
+name: New Release
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    name: Build ChildServiceProvider
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - name: Test
+        run: dotnet test
+      - name: Create NuGet packages
+        run: |
+          GITHUB_VERSION="${{ github.ref }}"
+          GITHUB_VERSION=(${GITHUB_VERSION##*/})
+          RELEASE_VERSION="${GITHUB_VERSION//v}"
+          ARRAY_VERSION=(${RELEASE_VERSION//-/ })
+          VERSION="${ARRAY_VERSION[0]}"
+          VERSION_SUFFIX="${ARRAY_VERSION[1]}"
+          dotnet pack -c Release -o nupkg ./ChildServiceProvider.sln -p:AssemblyVersion=$VERSION -p:VersionPrefix=$VERSION -p:VersionSuffix=$VERSION_SUFFIX -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./nupkg/*.*
+          retention-days: 1
+  nugets:
+    needs: pack
+    runs-on: ubuntu-latest
+    name: Publish ChildServiceProvider
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nupkg
+          path: ./nupkg
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - name: Publish NuGet packages
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg -k ${{ secrets.NUGET_KEY }} -s https://api.nuget.org/v3/index.json
+  release:
+    needs: pack
+    runs-on: ubuntu-latest
+    name: Add artifacts to release
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nupkg
+          path: ./nupkg
+      - name: Get Version
+        id: vars
+        run: echo "tag=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: Release ${{ steps.vars.outputs.tag }}
+          tag_name: ${{ steps.vars.outputs.tag }}
+          draft: false
+          prerelease: false
+          files: |
+            nupkg/*.nupkg
+  cleanup:
+    needs: release
+    runs-on: ubuntu-latest
+    name: Clenup artifacts
+    steps:
+      - uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            nupkg
